@@ -1,0 +1,52 @@
+---
+title: "Explore stplanr"
+output: html_document
+---
+
+```{r, include=FALSE}
+library(tidyverse)
+library(stplanr)
+library(dodgr)
+library(osmdata)
+library(sf)
+library(leaflet)
+```
+
+
+## osmnx functionality
+- getting data from OSM
+- converting spatial network to graph data structure
+- routing through the spatial graph
+- adding flows
+
+## Getting data from OSM
+Unlike osmnx, which includes a set of OSM data retrieval functionality, stplanr depends on other packages to retrieve data from OSM. [osmdata](https://cran.r-project.org/web/packages/osmdata/vignettes/osmdata.html) is a simple package that can query OSM and extract data as a sf dataframe. 
+
+```{r}
+wellington_roads <- opq(bbox = 'Wellington New Zealand') %>%
+  add_osm_feature(key = 'highway') %>%
+  osmdata_sf()
+
+# Extract the line geometries
+wellington_roads_lines <- wellington_roads$osm_lines
+```
+
+
+# Plotting data from OSM
+```{r}
+# Static plot
+# ggplot(wellington_roads_lines) + geom_sf()
+
+# interactive plot
+# osmdata gives name to geometry column
+# https://github.com/ropensci/osmdata/issues/100
+names(wellington_roads_lines$geometry) <- NULL
+
+p <- leaflet(wellington_roads_lines) %>%
+  addTiles() %>%
+  addPolylines(label = ~name)
+p
+```
+
+# Converting road network to graph structure
+

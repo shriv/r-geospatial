@@ -1,0 +1,96 @@
+---
+title: "Explore statues and memorials"
+output: html_document
+---
+
+```{r, include=FALSE}
+library(tidyverse)
+library(stplanr)
+library(dodgr)
+library(osmdata)
+library(sf)
+library(udpipe)
+library(leaflet)
+```
+
+## Getting data from OSM
+Unlike osmnx, which includes a set of OSM data retrieval functionality, stplanr depends on other packages to retrieve data from OSM. [osmdata](https://cran.r-project.org/web/packages/osmdata/vignettes/osmdata.html) is a simple package that can query OSM and extract data as a sf dataframe. 
+
+```{r}
+wellington_statues_monuments <- opq(bbox = 'Wellington New Zealand') %>%
+  add_osm_feature(key = 'historic', value = 'monument') %>%
+  osmdata_sf()
+
+wellington_statues_memorials <- opq(bbox = 'Wellington New Zealand') %>%
+  add_osm_feature(key = 'historic', value = 'memorial') %>%
+  osmdata_sf()
+
+  
+wellington_statues_tourism <- opq(bbox = 'Wellington New Zealand') %>%
+  add_osm_feature(key = 'tourism', value = 'artwork') %>%
+  osmdata_sf()
+
+wellington_statues_loc <- rbind(wellington_statues_tourism$osm_points %>% 
+                                  select(name, geometry, tourism) %>% 
+                                  rename(type = tourism),
+                                wellington_statues_monuments$osm_points %>% 
+                                  select(name, geometry, historic) %>% 
+                                  rename(type = historic),
+                                wellington_statues_monuments$osm_polygons %>% 
+                                  select(name, geometry, historic) %>% 
+                                  rename(type = historic) %>% 
+                                  st_centroid(),
+                                wellington_statues_memorials$osm_points %>% 
+                                  select(name, geometry, historic) %>% 
+                                  rename(type = historic), 
+                                wellington_statues_memorials$osm_polygons %>% 
+                                  select(name, geometry, historic) %>% 
+                                  rename(type = historic) %>% 
+                                  st_centroid()) 
+
+```
+
+```{r}
+# Static plot
+# ggplot(wellington_roads_lines) + geom_sf()
+
+# interactive plot
+# osmdata gives name to geometry column
+# https://github.com/ropensci/osmdata/issues/100
+# names(wellington_roads_lines$geometry) <- NULL
+
+wellington_statues_loc_xy <- bind_cols(wellington_statues_loc %>% st_set_geometry(NULL),
+                                       wellington_statues_loc %>% st_coordinates() %>% as_tibble()) %>% 
+  filter(!is.na(name)) %>% 
+  mutate(class_name = tolower(name)) %>% 
+  mutate(culture = if_else(str_detect(class_name, 
+                                      paste(c("nga", "te ", "ngi",
+                                              "wahine", "kupe",
+                                              "moko", "haka"), collapse = '|')),
+                                      "Maori",
+                                      "Non-Maori"))
+
+factpal <- colorFactor(topo.colors(length(unique(wellington_statues_loc_xy$culture))),
+                       wellington_statues_loc_xy$culture)
+
+p <- leaflet(wellington_statues_loc_xy %>% filter(type %in% c("memorial", "monument"))) %>%
+  addTiles() %>%
+  addCircleMarkers(label = ~name,
+                   lat = ~Y, 
+                   lng = ~X,
+                   color = ~factpal(culture))
+p
+```
+
+```{r}
+#wellington_statues_loc_xy
+eng <- udpipe_download_model(language = "english")
+#eng <- udpipe_load_model(file = "english.udpipe")
+# tokens = udpipe::udpipe("John and Mary went to New York. John loved it!", "english")
+
+statue_names <- wellington_statues_loc_xy %>% 
+  select(name) %>% 
+  rename(text = name) %>% 
+  mutate(doc_id = 1)
+
+```
