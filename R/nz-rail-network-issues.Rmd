@@ -36,18 +36,13 @@ nz_rail <- st_read(here::here("data", "kiwirail.gdb")) %>%
   filter(!Type %in% c("Crossover", "Yard Track")) %>%
   st_transform(2193) %>% 
   st_cast("LINESTRING")
-
-railway_net <- nz_rail %>%
-  as_sfnetwork(directed=F) 
 ```
 
+Included in this repo is also a file of port locations from around the world. Though this example will only use a subset of New Zealand ports. 
 ```{r}
 # nz port locations
-port_locs <- read_csv(glue::glue("~/Documents",
-                                 "infrastructure-analytics",
-                                 "data",
-                                 "port_locations.csv",
-                                 .sep="/")) %>%
+port_locs <- read_csv(here::here("data",
+                                 "port_locations.csv")) %>%
   st_as_sf(coords=c("lon", "lat"), crs=4326) %>%
   filter(country == "New Zealand") %>%
   filter(LOCODE %in% c("NZAKL", "NZTRG", "NZNPE", "NZWLG",
@@ -57,6 +52,18 @@ port_locs <- read_csv(glue::glue("~/Documents",
 
 ```
 
+
+## Creating a routeable rail network
+The excellent new `sfnetworks` package offers a very simple way to create a routeable network, a graph structure, from any spatial points or lines dataset. Note, the railway network, originally a `multi-linestring` spatial lines dataset has to be cast as a simpler `linestring` for the conversion to an `sfnetwork` data format. This is done at the outset - when the dataset is imported. 
+
+```{r}
+railway_net <- nz_rail %>%
+  as_sfnetwork(directed=F) 
+```
+
+
+## Associating external data with network nodes
+In many cases of routing problems, we're interested in the route to a point of interest (POI) that is defined separately. Here, the POIs are port locations. For routing to be possible, these POIs need to be associated to a node in the `sfnetwork` graph. For the inclusion of new The new `st_nearest_feature` is a helper function in the `sfnetworks` package that finds the index of the closest feature (nodes or edges depending on choice) to the POI. 
 
 ```{r}
 
@@ -69,7 +76,10 @@ orig_dest <- bind_cols(tibble(to_port = st_sfc(st_point(c(1758271, 5921462)))) %
   mutate(to_index = st_nearest_feature(to_port, nodes_rail), 
          from_index = st_nearest_feature(from_port, nodes_rail),
          route = row_number())
+```
 
+## Routing
+```{r}
 # function that needs to be converted to pmap
 st_network_paths_mod <- function(from, to){
   return(try(st_network_paths(railway_net, from, to)))
