@@ -63,15 +63,18 @@ railway_net <- nz_rail %>%
 
 
 ## Associating external data with network nodes
-In many cases of routing problems, we're interested in the route to a point of interest (POI) that is defined separately. Here, the POIs are port locations. For routing to be possible, these POIs need to be associated to a node in the `sfnetwork` graph. For the inclusion of new The new `st_nearest_feature` is a helper function in the `sfnetworks` package that finds the index of the closest feature (nodes or edges depending on choice) to the POI. 
+In many cases of routing problems, we're interested in the route to a point of interest (POI) that is defined separately. Here, the POIs are port locations. For routing to be possible, these POIs need to be associated to a node in the `sfnetwork` graph. For the inclusion of new The new `st_nearest_feature` is a helper function in the `sfnetworks` package that finds the index of the closest feature (nodes or edges depending on choice) to the POI. In this example, we are trying to find a route from Auckland to Wellington, New Zealand. 
 
 ```{r}
 
 nodes_rail <- railway_net %>% activate("nodes") %>% st_as_sf()
-orig_dest <- bind_cols(tibble(to_port = st_sfc(st_point(c(1758271, 5921462)))) %>% 
-                       st_as_sf(crs = 2193), 
-                       tibble(from_port = st_sfc(st_point(c(1749904, 5428126)))) %>% 
-                       st_as_sf(crs = 2193)) %>%
+
+from = "Auckland"
+to = "Wellington"
+
+
+orig_dest <- bind_cols(tibble(from_port = port_locs %>% filter(port_name == from) %>% pull(geometry)), 
+                       tibble(to_port = port_locs %>% filter(port_name == to) %>% pull(geometry))) %>%
   st_as_sf(crs = 2193) %>%
   mutate(to_index = st_nearest_feature(to_port, nodes_rail), 
          from_index = st_nearest_feature(from_port, nodes_rail),
@@ -79,6 +82,8 @@ orig_dest <- bind_cols(tibble(to_port = st_sfc(st_point(c(1758271, 5921462)))) %
 ```
 
 ## Routing
+Once the indices of the POIs are found, we can use the `st_network_paths` wrapper function to find the shortest path between a single point of origin and a vector of destinations. However, the function returns no path as seen by the empty list in the `edge_paths` column. 
+
 ```{r}
 # function that needs to be converted to pmap
 st_network_paths_mod <- function(from, to){
@@ -94,6 +99,8 @@ routes_df
 
 ```
 
+## Diagnosing issues
+The difficulty with spatial networks is that they may appear connected to the naked eye but there are some insidious issues that manifest in a disconnected graph. A simple diagnostic is to examine the connectivity of all the nodes in the network. A good metric is the node `degree` - the number of edges connected to any node. When the degree is `1`, the node is only connected to one edge. Terminal nodes, where the tracks end, are legitimate single degree nodes. However, as the interactive graph below shows, the whole network is comprised of disconnected single connection nodes. No wonder the routing algorithm couldn't find a path! 
 
 ```{r}
 open_ended_nodes <- railway_net %>% 
@@ -108,11 +115,8 @@ disconnected_edges <- railway_net %>%
   st_as_sf() %>% 
   filter(from %in% open_ended_nodes$row | to %in% open_ended_nodes$row)
 
-```
 
-
-```{r}
-
+# Visualise connectivity
 mapview(railway_net %>% activate("edges") %>% st_as_sf(), layer.name="rail network") + 
   mapview(disconnected_edges, color="red", layer.name = "nodes with only 1 edge") + 
   mapview(open_ended_nodes, color="red", col.regions="red", layer.name = "edges of 1 edge nodes")
@@ -121,6 +125,8 @@ mapview(railway_net %>% activate("edges") %>% st_as_sf(), layer.name="rail netwo
 
 
 ## Managing the issues
+
+In my example, there were two key issues preventing a connected network: (1) too high precision of coordinates leading to small gaps between what should be connected edges and, (2) edges connected to interior nodes. The first is a data problem. The degree of rounding to the nearest 10 m is possibly a little high, but examining some of the disconnected areas identified gaps of a few metres. The second problem appears to be a peculiarity of the `sfnetworks` paradigm where [edges that aren't connected at terminal nodes are considered disconnected](https://luukvdmeer.github.io/sfnetworks/articles/preprocess_and_clean.html#subdivide-edges-1). Luckily solving these two issues is not too challenging with sensible suggestions [here](https://gis.stackexchange.com/questions/370640/how-to-connect-edges-in-a-network-even-if-they-dont-exactly-match-spatially) for the first problem and `sfnetworks` documentation on the operation `to_spatial_subdivision` for the second. 
 
 ```{r}
 
@@ -142,6 +148,45 @@ railway_net <- nz_rail %>%
 ```
 
 
+## A connected network?
+
+If we repeat the same routing calculation between the two points, we see now that there is a path!
+
+```{r}
+
+nodes_rail <- railway_net %>% activate("nodes") %>% st_as_sf()
+
+orig_dest <- bind_cols(tibble(from_port = port_locs %>% filter(port_name == from) %>% pull(geometry)), 
+                       tibble(to_port = port_locs %>% filter(port_name == to) %>% pull(geometry))) %>%
+  st_as_sf(crs = 2193) %>%
+  mutate(to_index = st_nearest_feature(to_port, nodes_rail), 
+         from_index = st_nearest_feature(from_port, nodes_rail),
+         route = row_number())
+
+routes_df <- orig_dest %>%
+  mutate(path = pmap(list(from = from_index, to = to_index), .f=st_network_paths_mod)) %>% 
+  unnest(cols=c(path))
+
+auck_wlg <- routes_df %>% 
+  unnest(edge_paths) %>% 
+  select(edge_paths) %>% 
+  st_drop_geometry() %>% 
+  inner_join(railway_net %>% 
+               activate("edges") %>% 
+               st_as_sf() %>% 
+               mutate(edge = row_number()), by = c("edge_paths" = "edge"))  %>% 
+  st_as_sf()
+
+# Visualise route
+ggplot() + 
+  geom_sf(data = railway_net %>% activate("edges") %>% st_as_sf()) + 
+  geom_sf(data=auck_wlg, colour="red") 
+```
+
+
+## Why does routing work now?
+
+Repeating the calculation of the node degree, we now see that there are very few disconnected nodes in the corrected network. The nodes that are disconnected and not at the end of the tracks are actually odd little side tracks - probably around railway stations and junctions. 
 
 ```{r}
 open_ended_nodes <- railway_net %>% 
@@ -156,11 +201,7 @@ disconnected_edges <- railway_net %>%
   st_as_sf() %>% 
   filter(from %in% open_ended_nodes$row | to %in% open_ended_nodes$row)
 
-```
-
-
-```{r}
-
+# Visualise corrected network
 mapview(railway_net %>% activate("edges") %>% st_as_sf(), layer.name="rail network") + 
   mapview(disconnected_edges, color="red", layer.name = "nodes with only 1 edge") + 
   mapview(open_ended_nodes, color="red", col.regions="red", layer.name = "edges of 1 edge nodes")
