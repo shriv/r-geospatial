@@ -20,6 +20,7 @@ library(tidygraph)
 library(sf)
 library(osmdata)
 library(mapview)
+library(htmlwidgets)
 library(here)
 library(rmarkdown)
 ```
@@ -92,7 +93,9 @@ st_network_paths_mod <- function(from, to){
 
 routes_df <- orig_dest %>%
   mutate(path = pmap(list(from = from_index, to = to_index), .f=st_network_paths_mod)) %>% 
-  unnest(cols=c(path))
+  unnest(cols=c(path)) %>% 
+  unnest(cols=c(node_paths, edge_paths)) %>% 
+  select(-from_port, -to_port)
 
 routes_df
 
@@ -117,9 +120,11 @@ disconnected_edges <- railway_net %>%
 
 
 # Visualise connectivity
-mapview(railway_net %>% activate("edges") %>% st_as_sf(), layer.name="rail network") + 
+disconnected <- mapview(railway_net %>% activate("edges") %>% st_as_sf(), layer.name="rail network") + 
   mapview(disconnected_edges, color="red", layer.name = "nodes with only 1 edge") + 
   mapview(open_ended_nodes, color="red", col.regions="red", layer.name = "edges of 1 edge nodes")
+
+mapshot(disconnected, here::here("results", "disconnected_network.html"))
 
 ```
 
@@ -143,7 +148,8 @@ st_geometry(nz_rail) <- nz_rail %>%
 # terminal nodes
 railway_net <- nz_rail %>%
   as_sfnetwork(directed=F) %>% 
-  convert(to_spatial_subdivision)
+  convert(to_spatial_subdivision) %>% 
+  convert(to_spatial_simple)
 
 ```
 
@@ -202,8 +208,11 @@ disconnected_edges <- railway_net %>%
   filter(from %in% open_ended_nodes$row | to %in% open_ended_nodes$row)
 
 # Visualise corrected network
-mapview(railway_net %>% activate("edges") %>% st_as_sf(), layer.name="rail network") + 
+connected <- mapview(railway_net %>% activate("edges") %>% st_as_sf(), layer.name="rail network") + 
   mapview(disconnected_edges, color="red", layer.name = "nodes with only 1 edge") + 
   mapview(open_ended_nodes, color="red", col.regions="red", layer.name = "edges of 1 edge nodes")
+
+# mapshot(connected, here::here("results", "connected_network.html"))
+htmlwidgets::saveWidget(connected@map, here::here("results", "connected_network.html"))
 
 ```
